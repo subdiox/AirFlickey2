@@ -11,6 +11,7 @@ public class Keyboard : MonoBehaviour
     GameObject keyPressed = null;
     GameObject clonedKey = null;
     Vector3 keyPosition = new Vector3();
+    int lastDirection = 0;
     public TextMeshPro textField;
 
     Dictionary<string, string> hiragana = new Dictionary<string, string>() {
@@ -38,18 +39,18 @@ public class Keyboard : MonoBehaviour
         3 : 現在位置がキーをタップした位置から右方向にずれたと判定されるとき
         4 : 現在位置がキーをタップした位置から下方向にずれたと判定されるとき
     */
-    int GetCurrentDirection() {
-        int direction = -1;
-        foreach(var source in CoreServices.InputSystem.DetectedInputSources)
-        {
-            // Ignore anything that is not a hand because we want articulated hands
-            if (source.SourceType == InputSourceType.Hand)
+    void GetCurrentDirection() {
+        if (keyPressed && hiragana.ContainsKey(keyPressed.name)) {
+            foreach(var source in CoreServices.InputSystem.DetectedInputSources)
             {
-                foreach (var p in source.Pointers)
+                // Ignore anything that is not a hand because we want articulated hands
+                if (source.SourceType == InputSourceType.Hand)
                 {
-                    if (p is PokePointer) {
-                        Vector3 position = p.Position;
-                        if (keyPressed != null) {
+                    foreach (var p in source.Pointers)
+                    {
+                        if (p is PokePointer) {
+                            int direction;
+                            Vector3 position = p.Position;
                             Vector3 relativePosition = position - keyPosition;
                             Vector2 relativePosition2 = relativePosition;
                             float angle = Vector2.Angle(Vector2.right, relativePosition2);
@@ -64,49 +65,52 @@ public class Keyboard : MonoBehaviour
                             } else {
                                 direction = 4;
                             }
-                            if (clonedKey == null) {
+                            string inputString = hiragana[keyPressed.name][direction].ToString();
+                            Debug.Log($"hiragana: {keyPressed.name}, {direction}, {hiragana[keyPressed.name][direction]}");
+                            if (lastDirection != direction) {
+                                if (clonedKey) {
+                                    Destroy(clonedKey);
+                                }
                                 clonedKey = CloneKey(direction);
+                                SetKeyName(clonedKey, inputString);
+                                lastDirection = direction;
                             }
                             if (relativePosition.z < -0.02) { // キーから手を離したと判定する基準
-                                // INPUT
-                                if (keyPressed && hiragana.ContainsKey(keyPressed.name)) {
-                                    textField.text += hiragana[keyPressed.name][direction];
-                                    keyPressed = null;
-                                }
+                                textField.text += inputString;
+                                keyPressed = null;
                                 if (clonedKey) {
                                     Destroy(clonedKey);
                                     clonedKey = null;
                                 }
+                                lastDirection = 0;
                                 keyPosition = new Vector3();
                             }
+                            return;
                         }
-                        break;
                     }
                 }
-                break;
             }
         }
-        return direction;
+    }
+
+    public void SetKeyName(GameObject key, string name) {
+        key.GetComponentInChildren<TextMeshPro>().text = name;
     }
 
     public GameObject CloneKey(int direction) {
         Vector3 relative = new Vector3();
         if (direction == 1) {
-            relative = new Vector3(-0.032f, 0, -0.002f);
+            relative = new Vector3(-0.032f, 0, -0.005f);
         } else if (direction == 2) {
-            relative = new Vector3(0, 0.032f, -0.002f);
+            relative = new Vector3(0, 0.032f, -0.005f);
         } else if (direction == 3) {
-            relative = new Vector3(0.032f, 0, -0.002f);
+            relative = new Vector3(0.032f, 0, -0.005f);
         } else if (direction == 4) {
-            relative = new Vector3(0, -0.032f, -0.002f);
+            relative = new Vector3(0, -0.032f, -0.005f);
         } else {
             return null;
         }
         var clone = GameObject.Instantiate(keyPressed) as GameObject;
-        if (hiragana.ContainsKey(keyPressed.name)) {
-            var tmp = clone.GetComponentInChildren<TextMeshPro>();
-            tmp.text = hiragana[keyPressed.name][direction].ToString();
-        }
         clone.transform.parent = keyPressed.transform.parent;
         clone.transform.localPosition = keyPressed.transform.localPosition + relative;
         clone.transform.localScale = keyPressed.transform.localScale;
@@ -136,6 +140,17 @@ public class Keyboard : MonoBehaviour
     }
 
     public void OnKeyTouchCompleted(GameObject key, HandTrackingInputEventData eventData) {
+        if (!hiragana.ContainsKey(keyPressed.name)) {
+            if (keyPressed.name == "Space") {
+                textField.text += " ";
+            } else if (keyPressed.name == "Return") {
+                textField.text += "\n";
+            } else if (keyPressed.name == "Delete") {
+                textField.text = textField.text.Remove(textField.text.Length - 1);
+            }
+            keyPressed = null;
+            keyPosition = new Vector3();
+        }
     }
 
     public void OnKeyTouchUpdated(GameObject key, HandTrackingInputEventData eventData) {
