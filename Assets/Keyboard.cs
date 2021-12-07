@@ -12,7 +12,11 @@ public class Keyboard : MonoBehaviour
     GameObject clonedKey = null;
     Vector3 keyPosition = new Vector3();
     int lastDirection = 0;
+    string confirmedText = "";
+    string unconfirmedText = "";
+    bool cursorDisplayed = false;
     public TextMeshPro textField;
+    public GameObject dummy;
 
     Dictionary<string, string> hiragana = new Dictionary<string, string>() {
         {"A", "あいうえお"},
@@ -27,8 +31,6 @@ public class Keyboard : MonoBehaviour
         {"Wa", "わをんー～"},
         {"Mark", "、。？！…"}
     };
-
-    
 
     /*
        現在のフリック方向(direction)を取得する関数
@@ -76,7 +78,7 @@ public class Keyboard : MonoBehaviour
                                 lastDirection = direction;
                             }
                             if (relativePosition.z < -0.02) { // キーから手を離したと判定する基準
-                                textField.text += inputString;
+                                unconfirmedText += inputString;
                                 keyPressed = null;
                                 if (clonedKey) {
                                     Destroy(clonedKey);
@@ -93,11 +95,11 @@ public class Keyboard : MonoBehaviour
         }
     }
 
-    public void SetKeyName(GameObject key, string name) {
+    void SetKeyName(GameObject key, string name) {
         key.GetComponentInChildren<TextMeshPro>().text = name;
     }
 
-    public GameObject CloneKey(int direction) {
+    GameObject CloneKey(int direction) {
         Vector3 relative = new Vector3();
         if (direction == 1) {
             relative = new Vector3(-0.032f, 0, -0.005f);
@@ -110,25 +112,87 @@ public class Keyboard : MonoBehaviour
         } else {
             return null;
         }
-        var clone = GameObject.Instantiate(keyPressed) as GameObject;
+        var clone = GameObject.Instantiate(dummy) as GameObject;
         clone.transform.parent = keyPressed.transform.parent;
         clone.transform.localPosition = keyPressed.transform.localPosition + relative;
         clone.transform.localScale = keyPressed.transform.localScale;
-        clone.transform.rotation = keyPressed.transform.rotation;
+        clone.transform.rotation = keyPressed.transform.rotation; 
+        clone.SetActive(true);
         return clone;
+    }
+
+    void UpdateCursor() {
+        cursorDisplayed = !cursorDisplayed;
+    }
+
+    char CutOutText(ref string text) {
+        char lastChar = text[text.Length - 1];
+        text = text.Remove(text.Length - 1);
+        return lastChar;
+    }
+
+    char ConvertChar(char c) {
+        string[] dict = new string[] {
+            "あぁ",
+            "いぃ",
+            "うぅゔ",
+            "えぇ",
+            "おぉ",
+            "かが",
+            "きぎ",
+            "くぐ",
+            "けげ",
+            "こご",
+            "さざ",
+            "しじ",
+            "すず",
+            "せぜ",
+            "そぞ",
+            "ただ",
+            "ちぢ",
+            "つっづ",
+            "てで",
+            "とど",
+            "はばぱ",
+            "ひびぴ",
+            "ふぶぷ",
+            "へべぺ",
+            "ほぼぽ",
+            "やゃ",
+            "ゆゅ",
+            "よょ",
+            "わゎ"
+        };
+        foreach (string text in dict) {
+            for (int i = 0; i < text.Length; i ++) {
+                if (c == text[i]) {
+                    if (i == text.Length - 1) {
+                        return text[0];
+                    } else {
+                        return text[i + 1];
+                    }
+                }
+            }
+        }
+        return c;
     }
 
     /* --- Callbacks --- */
     // Start is called before the first frame update
     void Start()
     {
-        
+        InvokeRepeating("UpdateCursor", 0.5f, 0.5f);
     }
 
     // Update is called once per frame
     void Update()
     {
         GetCurrentDirection();
+        if (cursorDisplayed) {
+            textField.text = $"{confirmedText}<u>{unconfirmedText}</u>|";
+        } else {
+            textField.text = $"{confirmedText}<u>{unconfirmedText}</u>";
+        }
     }
 
     public void OnKeyTouchStarted(GameObject key, HandTrackingInputEventData eventData)
@@ -142,11 +206,29 @@ public class Keyboard : MonoBehaviour
     public void OnKeyTouchCompleted(GameObject key, HandTrackingInputEventData eventData) {
         if (!hiragana.ContainsKey(keyPressed.name)) {
             if (keyPressed.name == "Space") {
-                textField.text += " ";
+                if (unconfirmedText.Length > 0) {
+                    // 変換処理
+                } else {
+                    confirmedText += "　";
+                }
             } else if (keyPressed.name == "Return") {
-                textField.text += "\n";
+                if (unconfirmedText.Length > 0) {
+                    confirmedText += unconfirmedText;
+                    unconfirmedText = "";
+                } else {
+                    confirmedText += "\n";
+                }
             } else if (keyPressed.name == "Delete") {
-                textField.text = textField.text.Remove(textField.text.Length - 1);
+                if (unconfirmedText.Length > 0) {
+                    CutOutText(ref unconfirmedText);
+                } else {
+                    CutOutText(ref confirmedText);
+                }
+            } else if (keyPressed.name == "Special") {
+                if (unconfirmedText.Length > 0) {
+                    char lastChar = CutOutText(ref unconfirmedText);
+                    unconfirmedText += ConvertChar(lastChar);
+                }
             }
             keyPressed = null;
             keyPosition = new Vector3();
