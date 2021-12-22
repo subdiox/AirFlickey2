@@ -2,10 +2,17 @@
 using System.Collections.Generic;
 using System;
 using UnityEngine;
+using UnityEngine.Networking;
 using Microsoft.MixedReality.Toolkit.Input;
 using Microsoft.MixedReality.Toolkit;
 using TMPro;
+using Newtonsoft.Json.Linq; 
 
+using System.IO;  
+using System.Linq;  
+using System.Net;  
+using System.Text;  
+using System.Web;  
 public class Keyboard : MonoBehaviour
 {
     GameObject keyPressed = null;
@@ -15,8 +22,14 @@ public class Keyboard : MonoBehaviour
     string confirmedText = "";
     string unconfirmedText = "";
     bool cursorDisplayed = false;
+    bool isDialing = false;
+    string[] candidates = {};
+    int candidateIndex = -1;
+    int lastIndex = 0;
     public TextMeshPro textField;
+    public TextMeshPro candidatesField;
     public GameObject dummy;
+    public GameObject buttonCollection;
 
     Dictionary<string, string> hiragana = new Dictionary<string, string>() {
         {"A", "あいうえお"},
@@ -79,6 +92,7 @@ public class Keyboard : MonoBehaviour
                             }
                             if (relativePosition.z < -0.02) { // キーから手を離したと判定する基準
                                 unconfirmedText += inputString;
+                                StartCoroutine("GetCandidates");
                                 keyPressed = null;
                                 if (clonedKey) {
                                     Destroy(clonedKey);
@@ -95,8 +109,61 @@ public class Keyboard : MonoBehaviour
         }
     }
 
+    void GetCurrentDialingAngle() {
+        foreach(var source in CoreServices.InputSystem.DetectedInputSources) {
+            // Ignore anything that is not a hand because we want articulated hands
+            if (source.SourceType == InputSourceType.Hand) {
+                foreach (var p in source.Pointers) {
+                    if (p is PokePointer) {
+                        Vector3 position = p.Position;
+                        // CalculateCircleData data = CalculateCircle.GetCalculateCirclebyFixedCenter(position.x, position.y);
+                        CalculateCircleData data = CalculateCircle.GetCalculateCircleDataPerTrace(position.x, position.y);
+                        if (data.isCalculated) {
+                            int index = GetIndexOf8(data.angle);
+                            if (lastIndex == index + 1) {
+                                candidateIndex -= 1;
+                            } else if (lastIndex == index - 1) {
+                                candidateIndex += 1;
+                            } else if (lastIndex > index) {
+                                candidateIndex += 1;
+                            } else if (lastIndex < index) {
+                                candidateIndex -= 1;
+                            }
+                            lastIndex = index;
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    int GetIndexOf8(double angle) {
+        if (angle < 45) {
+            return 0;
+        } else if (angle < 90) {
+            return 1;
+        } else if (angle < 135) {
+            return 2;
+        } else if (angle < 180) {
+            return 3;
+        } else if (angle < 225) {
+            return 4;
+        } else if (angle < 270) {
+            return 5;
+        } else if (angle < 315) {
+            return 6;
+        } else {
+            return 7;
+        }
+    }
+
     void SetKeyName(GameObject key, string name) {
         key.GetComponentInChildren<TextMeshPro>().text = name;
+    }
+
+    GameObject GetKey(string name) {
+        return buttonCollection.transform.Find(name).gameObject;
     }
 
     GameObject CloneKey(int direction) {
@@ -125,10 +192,13 @@ public class Keyboard : MonoBehaviour
         cursorDisplayed = !cursorDisplayed;
     }
 
-    char CutOutText(ref string text) {
-        char lastChar = text[text.Length - 1];
-        text = text.Remove(text.Length - 1);
-        return lastChar;
+    char? CutOutText(ref string text) {
+        if (text.Length > 0) {
+            char lastChar = text[text.Length - 1];
+            text = text.Remove(text.Length - 1);
+            return lastChar;
+        }
+        return null;
     }
 
     char ConvertChar(char c) {
@@ -177,6 +247,24 @@ public class Keyboard : MonoBehaviour
         return c;
     }
 
+    IEnumerator GetCandidates() {
+        string escapedText = UnityWebRequest.EscapeURL(unconfirmedText);
+        UnityWebRequest req = UnityWebRequest.Get($"http://www.google.com/transliterate?langpair=ja-Hira|ja&text={escapedText}");
+        yield return req.SendWebRequest();
+
+        if (req.isNetworkError || req.isHttpError) {
+            Debug.Log(req.error);
+        } else if (req.responseCode == 200) {
+            Debug.Log(req.downloadHandler.text);
+            JArray jar = JArray.Parse(req.downloadHandler.text);
+            foreach (JToken jt in jar) {  
+                candidates = jt[1].Values<string>().ToArray();
+                candidateIndex = -1;
+                break;
+            }
+        }
+    }
+
     /* --- Callbacks --- */
     // Start is called before the first frame update
     void Start()
@@ -193,6 +281,21 @@ public class Keyboard : MonoBehaviour
         } else {
             textField.text = $"{confirmedText}<u>{unconfirmedText}</u>";
         }
+        if (unconfirmedText.Length > 0) {
+            SetKeyName(GetKey("Space"), "変換");
+            SetKeyName(GetKey("Return"), "確定");
+        } else {
+            SetKeyName(GetKey("Space"), "空白");
+            SetKeyName(GetKey("Return"), "改行");
+        }
+        if (candidateIndex < 0 || candidates.Length <= candidateIndex) {
+            candidatesField.text = string.Join(" ", candidates);
+        } else {
+            var beforeCandidate = new ArraySegment<string>(candidates, 0, candidateIndex);
+            var candidate = candidates[candidateIndex];
+            var afterCandidate = new ArraySegment<string>(candidates, candidateIndex + 1, candidates.Length - candidateIndex - 1);
+            candidatesField.text = string.Join(" ", beforeCandidate) + $" <mark=#22f300aa>{candidate}</mark> " + string.Join(" ", afterCandidate);
+        }
     }
 
     public void OnKeyTouchStarted(GameObject key, HandTrackingInputEventData eventData)
@@ -207,13 +310,23 @@ public class Keyboard : MonoBehaviour
         if (!hiragana.ContainsKey(keyPressed.name)) {
             if (keyPressed.name == "Space") {
                 if (unconfirmedText.Length > 0) {
-                    // 変換処理
+                    if (candidates.Length - 1 == candidateIndex) {
+                        candidateIndex = 0;
+                    } else {
+                        candidateIndex += 1;
+                    }
                 } else {
                     confirmedText += "　";
                 }
             } else if (keyPressed.name == "Return") {
                 if (unconfirmedText.Length > 0) {
-                    confirmedText += unconfirmedText;
+                    if (candidateIndex > 0 && candidateIndex < candidates.Length) {
+                        confirmedText += candidates[candidateIndex];
+                        candidateIndex = -1;
+                        candidates = new string[]{};
+                    } else {
+                        confirmedText += unconfirmedText;
+                    }
                     unconfirmedText = "";
                 } else {
                     confirmedText += "\n";
@@ -221,13 +334,15 @@ public class Keyboard : MonoBehaviour
             } else if (keyPressed.name == "Delete") {
                 if (unconfirmedText.Length > 0) {
                     CutOutText(ref unconfirmedText);
+                    StartCoroutine("GetCandidates");
                 } else {
                     CutOutText(ref confirmedText);
                 }
             } else if (keyPressed.name == "Special") {
-                if (unconfirmedText.Length > 0) {
-                    char lastChar = CutOutText(ref unconfirmedText);
-                    unconfirmedText += ConvertChar(lastChar);
+                char? lastChar = CutOutText(ref unconfirmedText);
+                if (lastChar.HasValue) {
+                    unconfirmedText += ConvertChar(lastChar.Value);
+                    StartCoroutine("GetCandidates");
                 }
             }
             keyPressed = null;
