@@ -2,9 +2,13 @@
 using System.Collections.Generic;
 using System;
 using UnityEngine;
+using UnityEngine.XR.WSA.Input;
 using UnityEngine.Networking;
 using Microsoft.MixedReality.Toolkit.Input;
 using Microsoft.MixedReality.Toolkit;
+using Microsoft.MixedReality.Toolkit.Utilities.Solvers;
+using Microsoft.MixedReality.Toolkit.Utilities;
+
 using TMPro;
 using Newtonsoft.Json.Linq; 
 
@@ -16,20 +20,19 @@ using System.Web;
 public class Keyboard : MonoBehaviour
 {
     GameObject keyPressed = null;
+    Vector3 keyPosition;
     GameObject clonedKey = null;
-    Vector3 keyPosition = new Vector3();
     int lastDirection = 0;
     string confirmedText = "";
     string unconfirmedText = "";
     bool cursorDisplayed = false;
-    bool isDialing = false;
     string[] candidates = {};
     int candidateIndex = -1;
-    int lastIndex = 0;
     public TextMeshPro textField;
     public TextMeshPro candidatesField;
     public GameObject dummy;
     public GameObject buttonCollection;
+    public bool grabMode;
 
     Dictionary<string, string> hiragana = new Dictionary<string, string>() {
         {"A", "あいうえお"},
@@ -44,119 +47,6 @@ public class Keyboard : MonoBehaviour
         {"Wa", "わをんー～"},
         {"Mark", "、。？！…"}
     };
-
-    /*
-       現在のフリック方向(direction)を取得する関数
-       [direction]
-        0 : 現在位置がキーをタップした位置から0.02未満しかずれていないとき
-        1 : 現在位置がキーをタップした位置から左方向にずれたと判定されるとき
-        2 : 現在位置がキーをタップした位置から上方向にずれたと判定されるとき
-        3 : 現在位置がキーをタップした位置から右方向にずれたと判定されるとき
-        4 : 現在位置がキーをタップした位置から下方向にずれたと判定されるとき
-    */
-    void GetCurrentDirection() {
-        if (keyPressed && hiragana.ContainsKey(keyPressed.name)) {
-            foreach(var source in CoreServices.InputSystem.DetectedInputSources)
-            {
-                // Ignore anything that is not a hand because we want articulated hands
-                if (source.SourceType == InputSourceType.Hand)
-                {
-                    foreach (var p in source.Pointers)
-                    {
-                        if (p is PokePointer) {
-                            int direction;
-                            Vector3 position = p.Position;
-                            Vector3 relativePosition = position - keyPosition;
-                            Vector2 relativePosition2 = relativePosition;
-                            float angle = Vector2.Angle(Vector2.right, relativePosition2);
-                            if (relativePosition2.magnitude < 0.02) { // フリックしなかったと判定する基準
-                                direction = 0;
-                            } else if (angle < 45) {
-                                direction = 3;
-                            } else if (angle > 135) {
-                                direction = 1;
-                            } else if (relativePosition2.y > 0) {
-                                direction = 2;
-                            } else {
-                                direction = 4;
-                            }
-                            string inputString = hiragana[keyPressed.name][direction].ToString();
-                            Debug.Log($"hiragana: {keyPressed.name}, {direction}, {hiragana[keyPressed.name][direction]}");
-                            if (lastDirection != direction) {
-                                if (clonedKey) {
-                                    Destroy(clonedKey);
-                                }
-                                clonedKey = CloneKey(direction);
-                                SetKeyName(clonedKey, inputString);
-                                lastDirection = direction;
-                            }
-                            if (relativePosition.z < -0.02) { // キーから手を離したと判定する基準
-                                unconfirmedText += inputString;
-                                StartCoroutine("GetCandidates");
-                                keyPressed = null;
-                                if (clonedKey) {
-                                    Destroy(clonedKey);
-                                    clonedKey = null;
-                                }
-                                lastDirection = 0;
-                                keyPosition = new Vector3();
-                            }
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    void GetCurrentDialingAngle() {
-        foreach(var source in CoreServices.InputSystem.DetectedInputSources) {
-            // Ignore anything that is not a hand because we want articulated hands
-            if (source.SourceType == InputSourceType.Hand) {
-                foreach (var p in source.Pointers) {
-                    if (p is PokePointer) {
-                        Vector3 position = p.Position;
-                        // CalculateCircleData data = CalculateCircle.GetCalculateCirclebyFixedCenter(position.x, position.y);
-                        CalculateCircleData data = CalculateCircle.GetCalculateCircleDataPerTrace(position.x, position.y);
-                        if (data.isCalculated) {
-                            int index = GetIndexOf8(data.angle);
-                            if (lastIndex == index + 1) {
-                                candidateIndex -= 1;
-                            } else if (lastIndex == index - 1) {
-                                candidateIndex += 1;
-                            } else if (lastIndex > index) {
-                                candidateIndex += 1;
-                            } else if (lastIndex < index) {
-                                candidateIndex -= 1;
-                            }
-                            lastIndex = index;
-                        }
-                        return;
-                    }
-                }
-            }
-        }
-    }
-
-    int GetIndexOf8(double angle) {
-        if (angle < 45) {
-            return 0;
-        } else if (angle < 90) {
-            return 1;
-        } else if (angle < 135) {
-            return 2;
-        } else if (angle < 180) {
-            return 3;
-        } else if (angle < 225) {
-            return 4;
-        } else if (angle < 270) {
-            return 5;
-        } else if (angle < 315) {
-            return 6;
-        } else {
-            return 7;
-        }
-    }
 
     void SetKeyName(GameObject key, string name) {
         key.GetComponentInChildren<TextMeshPro>().text = name;
@@ -265,17 +155,143 @@ public class Keyboard : MonoBehaviour
         }
     }
 
+    /*
+       現在のフリック方向(direction)を取得する関数
+       [direction]
+        0 : 現在位置がキーをタップした位置から0.02未満しかずれていないとき
+        1 : 現在位置がキーをタップした位置から左方向にずれたと判定されるとき
+        2 : 現在位置がキーをタップした位置から上方向にずれたと判定されるとき
+        3 : 現在位置がキーをタップした位置から右方向にずれたと判定されるとき
+        4 : 現在位置がキーをタップした位置から下方向にずれたと判定されるとき
+    */
+    int GetDirection(Vector3 position) {
+        Vector3 relativePosition = position - keyPosition;
+        Vector2 relativePosition2 = relativePosition;
+        float angle = Vector2.Angle(Vector2.right, relativePosition2);
+        if (relativePosition2.magnitude < 0.02) { // フリックしなかったと判定する基準
+            return 0;
+        } else if (angle < 45) {
+            return 3;
+        } else if (angle > 135) {
+            return 1;
+        } else if (relativePosition2.y > 0) {
+            return 2;
+        } else {
+            return 4;
+        }
+    }
+
+    void KeyStart(GameObject key, Vector3 position) {
+        if (keyPressed == null) {   
+            keyPressed = key;
+            keyPosition = position;
+        }
+    }
+
+    void KeyUpdate(Vector3 position) {
+        int direction = GetDirection(position);
+        
+        Debug.Log($"direction: {direction}");
+        string inputString = hiragana[keyPressed.name][direction].ToString();
+        if (lastDirection != direction) {
+            if (clonedKey) {
+                Destroy(clonedKey);
+            }
+            clonedKey = CloneKey(direction);
+            SetKeyName(clonedKey, inputString);
+            lastDirection = direction;
+        }
+        Vector3 relativePosition = position - keyPosition;
+        if (!grabMode && relativePosition.z < -0.02) { // キーから手を離したと判定する基準
+            KeyEnd(position);
+        }
+    }
+
+    void KeyEnd(Vector3 position) {
+        if (hiragana.ContainsKey(keyPressed.name)) {
+            int direction = GetDirection(position);
+            string inputString = hiragana[keyPressed.name][direction].ToString();
+            unconfirmedText += inputString;
+            StartCoroutine("GetCandidates");
+            keyPressed = null;
+            if (clonedKey) {
+                Destroy(clonedKey);
+                clonedKey = null;
+            }
+            lastDirection = 0;
+        } else {
+            if (keyPressed.name == "Space") {
+                if (unconfirmedText.Length > 0) {
+                    if (candidates.Length - 1 == candidateIndex) {
+                        candidateIndex = 0;
+                    } else {
+                        candidateIndex += 1;
+                    }
+                } else {
+                    confirmedText += "　";
+                }
+            } else if (keyPressed.name == "Return") {
+                if (unconfirmedText.Length > 0) {
+                    if (candidateIndex > 0 && candidateIndex < candidates.Length) {
+                        confirmedText += candidates[candidateIndex];
+                    } else {
+                        confirmedText += unconfirmedText;
+                    }
+                    candidateIndex = -1;
+                    candidates = new string[]{};
+                    unconfirmedText = "";
+                } else {
+                    confirmedText += "\n";
+                }
+            } else if (keyPressed.name == "Delete") {
+                if (unconfirmedText.Length > 1) {
+                    CutOutText(ref unconfirmedText);
+                    StartCoroutine("GetCandidates");
+                } else if (unconfirmedText.Length == 1) {
+                    CutOutText(ref unconfirmedText);
+                    candidateIndex = -1;
+                    candidates = new string[]{};
+                } else {
+                    CutOutText(ref confirmedText);
+                    candidateIndex = -1;
+                    candidates = new string[]{};
+                }
+            } else if (keyPressed.name == "Special") {
+                char? lastChar = CutOutText(ref unconfirmedText);
+                if (lastChar.HasValue) {
+                    unconfirmedText += ConvertChar(lastChar.Value);
+                    StartCoroutine("GetCandidates");
+                }
+            }
+            keyPressed = null;
+        }
+    }
+
     /* --- Callbacks --- */
     // Start is called before the first frame update
-    void Start()
-    {
+    void Start() {
         InvokeRepeating("UpdateCursor", 0.5f, 0.5f);
     }
 
+    void UpdateInput() {
+        foreach(var source in CoreServices.InputSystem.DetectedInputSources) {
+            // Ignore anything that is not a hand because we want articulated hands
+            if (source.SourceType == InputSourceType.Hand) {
+                foreach (var p in source.Pointers) {
+                    if (p is PokePointer) {
+                        KeyUpdate(p.Position);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     // Update is called once per frame
-    void Update()
-    {
-        GetCurrentDirection();
+    void Update() {
+        if (!grabMode && keyPressed && hiragana.ContainsKey(keyPressed.name)) {
+            UpdateInput();
+        }
         if (cursorDisplayed) {
             textField.text = $"{confirmedText}<u>{unconfirmedText}</u>|";
         } else {
@@ -298,58 +314,57 @@ public class Keyboard : MonoBehaviour
         }
     }
 
-    public void OnKeyTouchStarted(GameObject key, HandTrackingInputEventData eventData)
-    {
-        if (keyPressed == null) {
-            keyPressed = key;
-            keyPosition = eventData.InputData;
+    public void OnModeSelected(GameObject key) {
+        SolverHandler solverHandler = gameObject.GetComponent<SolverHandler>();
+        RadialView radialView = gameObject.GetComponent<RadialView>();
+        Debug.Log($"keyName: {key.name}");
+        if (key.name == "1") {
+            Debug.Log($"keyName: 1, solverHandler: {solverHandler}");
+            solverHandler.TrackedHandness = Handedness.None;
+            solverHandler.TrackedHandJoint = TrackedHandJoint.None;
+            solverHandler.TrackedTargetType = TrackedObjectType.Head;
+            solverHandler.RegisterSolver(radialView);
+            grabMode = false;
+        } else if (key.name == "2") {
+            Debug.Log($"keyName: 2, solverHandler: {solverHandler}");
+            solverHandler.TrackedHandness = Handedness.Left;
+            solverHandler.TrackedHandJoint = TrackedHandJoint.Palm;
+            solverHandler.TrackedTargetType = TrackedObjectType.HandJoint;
+            solverHandler.UnregisterSolver(radialView);
+            grabMode = false;
+        } else if (key.name == "3") {
+            Debug.Log($"keyName: 3, solverHandler: {solverHandler}");
+            solverHandler.TrackedHandness = Handedness.None;
+            solverHandler.TrackedHandJoint = TrackedHandJoint.None;
+            solverHandler.TrackedTargetType = TrackedObjectType.Head;
+            solverHandler.RegisterSolver(radialView);
+            grabMode = true;
         }
+        solverHandler.RefreshTrackedObject();
+    }
+
+    public void OnKeyTouchStarted(GameObject key, HandTrackingInputEventData eventData) {
+        KeyStart(key, eventData.InputData);
     }
 
     public void OnKeyTouchCompleted(GameObject key, HandTrackingInputEventData eventData) {
         if (!hiragana.ContainsKey(keyPressed.name)) {
-            if (keyPressed.name == "Space") {
-                if (unconfirmedText.Length > 0) {
-                    if (candidates.Length - 1 == candidateIndex) {
-                        candidateIndex = 0;
-                    } else {
-                        candidateIndex += 1;
-                    }
-                } else {
-                    confirmedText += "　";
-                }
-            } else if (keyPressed.name == "Return") {
-                if (unconfirmedText.Length > 0) {
-                    if (candidateIndex > 0 && candidateIndex < candidates.Length) {
-                        confirmedText += candidates[candidateIndex];
-                        candidateIndex = -1;
-                        candidates = new string[]{};
-                    } else {
-                        confirmedText += unconfirmedText;
-                    }
-                    unconfirmedText = "";
-                } else {
-                    confirmedText += "\n";
-                }
-            } else if (keyPressed.name == "Delete") {
-                if (unconfirmedText.Length > 0) {
-                    CutOutText(ref unconfirmedText);
-                    StartCoroutine("GetCandidates");
-                } else {
-                    CutOutText(ref confirmedText);
-                }
-            } else if (keyPressed.name == "Special") {
-                char? lastChar = CutOutText(ref unconfirmedText);
-                if (lastChar.HasValue) {
-                    unconfirmedText += ConvertChar(lastChar.Value);
-                    StartCoroutine("GetCandidates");
-                }
-            }
-            keyPressed = null;
-            keyPosition = new Vector3();
+            KeyEnd(eventData.InputData);
         }
     }
 
     public void OnKeyTouchUpdated(GameObject key, HandTrackingInputEventData eventData) {
+    }
+
+    public void OnKeyPointerDown(GameObject key, MixedRealityPointerEventData eventData) {
+        KeyStart(key, eventData.Pointer.Position);
+    }
+
+    public void OnKeyPointerClicked(GameObject key, MixedRealityPointerEventData eventData) {}
+    public void OnKeyPointerDragged(GameObject key, MixedRealityPointerEventData eventData) {
+        KeyUpdate(eventData.Pointer.Position);
+    }
+    public void OnKeyPointerUp(GameObject key, MixedRealityPointerEventData eventData) {
+        KeyEnd(eventData.Pointer.Position);
     }
 }
